@@ -1,6 +1,6 @@
 # Zoom RTMS Transcript Bridge
 
-Thin service for Workshop SOP 1. It keeps the long-lived Zoom RTMS SDK/WebSocket session outside Windmill and forwards transcript chunks into the Windmill script:
+Thin service for Workshop SOP 1. It keeps the long-lived Zoom event subscription and RTMS SDK/WebSocket session outside Windmill and forwards transcript chunks into the Windmill script:
 
 ```text
 f/workshop_signal_compiler/zoom_rtms_transcript_chunk_to_signal
@@ -10,8 +10,9 @@ f/workshop_signal_compiler/zoom_rtms_transcript_chunk_to_signal
 
 Windmill is used for orchestration, normalization, Baserow writes, review digest, and Paca handoff. Zoom RTMS is a meeting-duration realtime SDK/WebSocket workload, so this bridge owns only:
 
-- Zoom webhook validation / URL challenge
-- RTMS join
+- Zoom webhook validation / URL challenge when using webhook mode
+- Zoom event WebSocket connection / OAuth token refresh / heartbeat / reconnect when using WebSocket mode
+- RTMS join / leave on `meeting.rtms_started` and `meeting.rtms_stopped`
 - transcript packet callbacks
 - retrying POSTs to Windmill
 
@@ -26,6 +27,8 @@ Required:
 - `ZM_RTMS_CLIENT`
 - `ZM_RTMS_SECRET`
 - `ZOOM_WEBHOOK_SECRET_TOKEN`
+- `ZOOM_EVENT_SUBSCRIPTION_MODE=websocket`
+- `ZOOM_EVENT_WS_ENDPOINT`
 - `WINDMILL_BASE_URL`
 - `WINDMILL_WORKSPACE`
 - `WINDMILL_TOKEN`
@@ -37,7 +40,9 @@ npm install
 npm start
 ```
 
-Expose `POST /webhook` as the Zoom RTMS webhook endpoint.
+For the current Workshop deployment, configure the Zoom app event subscription as **WebSocket** and set `ZOOM_EVENT_WS_ENDPOINT` to the endpoint URL copied from Zoom Marketplace. The service obtains a Zoom OAuth client-credentials token, appends it to the endpoint URL, sends a heartbeat every 30 seconds, reconnects with backoff, and routes RTMS started/stopped events into the RTMS SDK join/leave path.
+
+Webhook mode remains available for local testing or future deployments: set `ZOOM_EVENT_SUBSCRIPTION_MODE=webhook` and expose `POST /webhook` as the Zoom RTMS webhook endpoint.
 
 ## Windmill payload mapping
 
