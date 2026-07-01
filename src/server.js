@@ -215,18 +215,54 @@ function transcriptSummary(meeting) {
   };
 }
 
+function normalizeZoomEventEnvelope(eventEnvelope) {
+  if (!eventEnvelope || typeof eventEnvelope !== 'object') return eventEnvelope;
+
+  let content = eventEnvelope.content;
+  if (typeof content === 'string') {
+    try {
+      content = JSON.parse(content);
+    } catch (_error) {
+      content = undefined;
+    }
+  }
+
+  if (content?.event) {
+    return {
+      event: content.event,
+      payload: content.payload || eventEnvelope.payload || {},
+      event_ts: content.event_ts || eventEnvelope.event_ts,
+      rawModule: eventEnvelope.module,
+    };
+  }
+
+  if (eventEnvelope.payload?.event) {
+    return {
+      event: eventEnvelope.payload.event,
+      payload: eventEnvelope.payload.payload || eventEnvelope.payload,
+      event_ts: eventEnvelope.payload.event_ts || eventEnvelope.event_ts,
+      rawModule: eventEnvelope.module,
+    };
+  }
+
+  return eventEnvelope;
+}
+
 function recordZoomEvent(eventEnvelope) {
-  const event = eventEnvelope?.event || eventEnvelope?.module || 'unknown';
-  const payload = eventEnvelope?.payload || {};
+  const normalizedEnvelope = normalizeZoomEventEnvelope(eventEnvelope);
+  const event = normalizedEnvelope?.event || normalizedEnvelope?.module || 'unknown';
+  const payload = normalizedEnvelope?.payload || {};
   const normalizedPayload = normalizeRtmsPayload(payload);
   recentZoomEvents.push({
     event,
+    rawModule: normalizedEnvelope?.rawModule || eventEnvelope?.module || null,
     receivedAt: new Date().toISOString(),
     meetingUuid: normalizedPayload.meeting_uuid || null,
     streamId: normalizedPayload.rtms_stream_id || null,
     hasJoinPayload: Boolean(normalizedPayload.meeting_uuid && normalizedPayload.rtms_stream_id && normalizedPayload.server_urls && normalizedPayload.signature),
   });
   while (recentZoomEvents.length > maxRecentZoomEvents) recentZoomEvents.shift();
+  return normalizedEnvelope;
 }
 
 function joinRtms(payload) {
@@ -312,9 +348,9 @@ function leaveRtms(payload) {
 }
 
 function handleZoomEvent(eventEnvelope) {
-  recordZoomEvent(eventEnvelope);
-  const event = eventEnvelope?.event;
-  const payload = eventEnvelope?.payload || {};
+  const normalizedEnvelope = recordZoomEvent(eventEnvelope);
+  const event = normalizedEnvelope?.event;
+  const payload = normalizedEnvelope?.payload || {};
   if (!event) return;
 
   if (event === 'meeting.rtms_started' || event === 'webinar.rtms_started' || event === 'session.rtms_started') {
@@ -437,11 +473,12 @@ async function connectZoomEventWebSocket() {
     const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data || '');
     try {
       const message = JSON.parse(text);
-      if (message?.module === 'heartbeat') {
-        recordZoomEvent(message);
+      const normalizedMessage = normalizeZoomEventEnvelope(message);
+      if (normalizedMessage?.module === 'heartbeat' || normalizedMessage?.event === 'heartbeat') {
+        recordZoomEvent(normalizedMessage);
         return;
       }
-      handleZoomEvent(message);
+      handleZoomEvent(normalizedMessage);
     } catch (error) {
       console.error(`Failed to parse Zoom event WebSocket message: ${error.message}`);
     }
