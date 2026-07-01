@@ -44,6 +44,10 @@ app.use(express.json({
 
 const clientsByMeeting = new Map();
 const streamToMeeting = new Map();
+const transcriptsByMeeting = new Map();
+const recentZoomEvents = [];
+const maxRecentZoomEvents = 50;
+const maxTranscriptChunksPerMeeting = 10_000;
 let httpServer = null;
 let zoomAccessTokenCache = null;
 let zoomEventWs = null;
@@ -135,13 +139,19 @@ function getStreamId(payload) {
   return normalizeRtmsPayload(payload).rtms_stream_id || '';
 }
 
-function buildWindmillArgs(rtmsPayload, data, timestamp, metadata) {
+function normalizeTranscriptChunk(rtmsPayload, data, timestamp, metadata) {
   const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data || '');
   const meetingUuid = getMeetingUuid(rtmsPayload);
   const participantId = String(metadata?.userId || metadata?.user_id || metadata?.participantId || 'unknown-participant');
   const speakerName = metadata?.userName || metadata?.user_name || metadata?.name || 'Unknown Speaker';
   const startTime = Number(metadata?.startTime || metadata?.start_time || timestamp || Date.now());
   const endTime = Number(metadata?.endTime || metadata?.end_time || timestamp || Date.now());
+
+  return { text, meetingUuid, participantId, speakerName, startTime, endTime };
+}
+
+function buildWindmillArgs(rtmsPayload, data, timestamp, metadata) {
+  const { text, meetingUuid, participantId, speakerName, startTime, endTime } = normalizeTranscriptChunk(rtmsPayload, data, timestamp, metadata);
 
   return {
     meeting_uuid: meetingUuid,
@@ -154,6 +164,69 @@ function buildWindmillArgs(rtmsPayload, data, timestamp, metadata) {
     language: String(metadata?.language || ''),
     dry_run: config.dryRun,
   };
+}
+
+function ensureTranscriptMeeting(meetingUuid, rtmsPayload = {}) {
+  if (!transcriptsByMeeting.has(meetingUuid)) {
+    transcriptsByMeeting.set(meetingUuid, {
+      meetingUuid,
+      streamId: getStreamId(rtmsPayload),
+      meetingUrl: rtmsPayload?.meeting_url || rtmsPayload?.join_url || '',
+      status: 'active',
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      chunkCount: 0,
+      chunks: [],
+      fullText: '',
+    });
+  }
+  return transcriptsByMeeting.get(meetingUuid);
+}
+
+function recordTranscriptChunk(rtmsPayload, data, timestamp, metadata) {
+  const chunk = normalizeTranscriptChunk(rtmsPayload, data, timestamp, metadata);
+  const meeting = ensureTranscriptMeeting(chunk.meetingUuid, rtmsPayload);
+  const item = {
+    index: meeting.chunkCount + 1,
+    speakerName: chunk.speakerName,
+    participantId: chunk.participantId,
+    startTime: chunk.startTime,
+    endTime: chunk.endTime,
+    text: chunk.text,
+    recordedAt: new Date().toISOString(),
+  };
+  meeting.chunkCount += 1;
+  meeting.updatedAt = item.recordedAt;
+  meeting.chunks.push(item);
+  if (meeting.chunks.length > maxTranscriptChunksPerMeeting) meeting.chunks.shift();
+  meeting.fullText = `${meeting.fullText}${meeting.fullText ? '\n' : ''}[${chunk.speakerName}] ${chunk.text}`;
+  return item;
+}
+
+function transcriptSummary(meeting) {
+  return {
+    meetingUuid: meeting.meetingUuid,
+    streamId: meeting.streamId,
+    status: meeting.status,
+    startedAt: meeting.startedAt,
+    updatedAt: meeting.updatedAt,
+    chunkCount: meeting.chunkCount,
+    lastChunk: meeting.chunks.at(-1) || null,
+  };
+}
+
+function recordZoomEvent(eventEnvelope) {
+  const event = eventEnvelope?.event || eventEnvelope?.module || 'unknown';
+  const payload = eventEnvelope?.payload || {};
+  const normalizedPayload = normalizeRtmsPayload(payload);
+  recentZoomEvents.push({
+    event,
+    receivedAt: new Date().toISOString(),
+    meetingUuid: normalizedPayload.meeting_uuid || null,
+    streamId: normalizedPayload.rtms_stream_id || null,
+    hasJoinPayload: Boolean(normalizedPayload.meeting_uuid && normalizedPayload.rtms_stream_id && normalizedPayload.server_urls && normalizedPayload.signature),
+  });
+  while (recentZoomEvents.length > maxRecentZoomEvents) recentZoomEvents.shift();
 }
 
 function joinRtms(payload) {
@@ -173,14 +246,16 @@ function joinRtms(payload) {
 
   const client = new rtms.Client();
   clientsByMeeting.set(meetingUuid, client);
+  ensureTranscriptMeeting(meetingUuid, normalizedPayload);
   if (streamId) streamToMeeting.set(streamId, meetingUuid);
 
   client.onTranscriptData(async (data, size, timestamp, metadata) => {
     try {
       const args = buildWindmillArgs(normalizedPayload, data, timestamp, metadata);
       if (!args.transcript_text.trim()) return;
+      const chunk = recordTranscriptChunk(normalizedPayload, data, timestamp, metadata);
       const jobId = await postToWindmill(args);
-      console.log(`Forwarded transcript chunk for ${meetingUuid}; bytes=${size}; windmill_job=${jobId}`);
+      console.log(`Forwarded transcript chunk for ${meetingUuid}; chunk=${chunk.index}; bytes=${size}; windmill_job=${jobId}`);
     } catch (error) {
       console.error('Failed to forward transcript chunk', error);
     }
@@ -189,6 +264,11 @@ function joinRtms(payload) {
   client.onLeave?.((reason) => {
     console.log(`RTMS left ${meetingUuid}: ${reason}`);
     clientsByMeeting.delete(meetingUuid);
+    const transcript = transcriptsByMeeting.get(meetingUuid);
+    if (transcript) {
+      transcript.status = 'ended';
+      transcript.updatedAt = new Date().toISOString();
+    }
     if (streamId) streamToMeeting.delete(streamId);
   });
 
@@ -222,11 +302,17 @@ function leaveRtms(payload) {
     console.error(`Failed to leave RTMS stream for ${key}`, error);
   } finally {
     clientsByMeeting.delete(key);
+    const transcript = transcriptsByMeeting.get(key);
+    if (transcript) {
+      transcript.status = 'ended';
+      transcript.updatedAt = new Date().toISOString();
+    }
     if (streamId) streamToMeeting.delete(streamId);
   }
 }
 
 function handleZoomEvent(eventEnvelope) {
+  recordZoomEvent(eventEnvelope);
   const event = eventEnvelope?.event;
   const payload = eventEnvelope?.payload || {};
   if (!event) return;
@@ -351,7 +437,10 @@ async function connectZoomEventWebSocket() {
     const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data || '');
     try {
       const message = JSON.parse(text);
-      if (message?.module === 'heartbeat') return;
+      if (message?.module === 'heartbeat') {
+        recordZoomEvent(message);
+        return;
+      }
       handleZoomEvent(message);
     } catch (error) {
       console.error(`Failed to parse Zoom event WebSocket message: ${error.message}`);
@@ -375,11 +464,28 @@ app.get('/healthz', (_req, res) => {
   res.json({
     ok: true,
     activeMeetings: clientsByMeeting.size,
+    recordedMeetings: transcriptsByMeeting.size,
+    activeTranscriptChunks: Array.from(transcriptsByMeeting.values())
+      .filter((meeting) => meeting.status === 'active')
+      .reduce((total, meeting) => total + meeting.chunkCount, 0),
     eventSubscription: {
       mode: config.zoomEventSubscriptionMode,
       websocket: zoomEventWsState,
+      recentEvents: recentZoomEvents.slice(-10),
     },
   });
+});
+
+app.get('/transcripts', (_req, res) => {
+  res.json({
+    meetings: Array.from(transcriptsByMeeting.values()).map(transcriptSummary),
+  });
+});
+
+app.get('/transcripts/:meetingUuid', (req, res) => {
+  const meeting = transcriptsByMeeting.get(req.params.meetingUuid);
+  if (!meeting) return res.status(404).json({ error: 'Transcript not found' });
+  return res.json(meeting);
 });
 
 app.post(config.webhookPath, (req, res) => {
