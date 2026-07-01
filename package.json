@@ -1,0 +1,19 @@
+{
+  "name": "zoom-rtms-transcript-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Thin bridge from Zoom RTMS transcript packets to Windmill SOP 1 ingestion.",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@zoom/rtms": "latest",
+    "dotenv": "latest",
+    "express": "latest"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
