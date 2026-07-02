@@ -50,7 +50,7 @@ ZOOM_TRANSCRIPT_LANGUAGE=CHINESE_SIMPLIFIED
 ZOOM_TRANSCRIPT_ENABLE_LID=false
 ```
 
-`ZOOM_TRANSCRIPT_LANGUAGE` accepts Zoom RTMS `TranscriptLanguage` names such as `NONE`, `ENGLISH`, `CHINESE_SIMPLIFIED`, or the numeric language ID. `ZOOM_TRANSCRIPT_ENABLE_LID=false` forces the configured source language instead of letting Zoom auto-detect/override it.
+`ZOOM_TRANSCRIPT_LANGUAGE` accepts Zoom RTMS `TranscriptLanguage` names such as `NONE`, `ENGLISH`, `CHINESE_SIMPLIFIED`, or the numeric language ID. `ZOOM_TRANSCRIPT_ENABLE_LID=false` forces the configured source language instead of letting Zoom auto-detect/override it. The bridge also applies a small SDK workaround so transcript-only language params are actually sent during RTMS join.
 
 Webhook mode remains available for local testing or future deployments: set `ZOOM_EVENT_SUBSCRIPTION_MODE=webhook` and expose `POST /webhook` as the Zoom RTMS webhook endpoint.
 

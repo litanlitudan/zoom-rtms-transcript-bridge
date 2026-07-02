@@ -169,19 +169,33 @@ function buildWindmillArgs(rtmsPayload, data, timestamp, metadata) {
 }
 
 function ensureTranscriptMeeting(meetingUuid, rtmsPayload = {}) {
-  if (!transcriptsByMeeting.has(meetingUuid)) {
-    transcriptsByMeeting.set(meetingUuid, {
-      meetingUuid,
-      streamId: getStreamId(rtmsPayload),
-      meetingUrl: rtmsPayload?.meeting_url || rtmsPayload?.join_url || '',
-      status: 'active',
-      startedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      chunkCount: 0,
-      chunks: [],
-      fullText: '',
-    });
+  const streamId = getStreamId(rtmsPayload);
+  const now = new Date().toISOString();
+  const existing = transcriptsByMeeting.get(meetingUuid);
+  if (existing) {
+    if (existing.status === 'ended' || (streamId && existing.streamId !== streamId)) {
+      existing.streamId = streamId;
+      existing.meetingUrl = rtmsPayload?.meeting_url || rtmsPayload?.join_url || existing.meetingUrl || '';
+      existing.status = 'active';
+      existing.startedAt = now;
+      existing.updatedAt = now;
+      existing.chunkCount = 0;
+      existing.chunks = [];
+      existing.fullText = '';
+    }
+    return existing;
   }
+  transcriptsByMeeting.set(meetingUuid, {
+    meetingUuid,
+    streamId,
+    meetingUrl: rtmsPayload?.meeting_url || rtmsPayload?.join_url || '',
+    status: 'active',
+    startedAt: now,
+    updatedAt: now,
+    chunkCount: 0,
+    chunks: [],
+    fullText: '',
+  });
   return transcriptsByMeeting.get(meetingUuid);
 }
 
@@ -289,6 +303,10 @@ function configureTranscriptLanguage(client) {
     enableLid: config.transcriptEnableLid,
   };
   try {
+    // SDK workaround: native configure() currently drops transcript-only params when
+    // no audio/video/deskshare params exist. Supplying default audio params keeps
+    // the transcript params object attached while media_types remains transcript-only.
+    client.setAudioParams({});
     client.setTranscriptParams(params);
     console.log(`Configured transcript params: srcLanguage=${srcLanguage}; enableLid=${params.enableLid}`);
   } catch (error) {
