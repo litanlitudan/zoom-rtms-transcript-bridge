@@ -21,6 +21,8 @@ const config = {
   websocketHeartbeatMs: Number(process.env.ZOOM_EVENT_WS_HEARTBEAT_MS || 30_000),
   websocketReconnectMinMs: Number(process.env.ZOOM_EVENT_WS_RECONNECT_MIN_MS || 2_000),
   websocketReconnectMaxMs: Number(process.env.ZOOM_EVENT_WS_RECONNECT_MAX_MS || 60_000),
+  transcriptLanguage: process.env.ZOOM_TRANSCRIPT_LANGUAGE || 'NONE',
+  transcriptEnableLid: String(process.env.ZOOM_TRANSCRIPT_ENABLE_LID || 'true').toLowerCase() === 'true',
 };
 
 if (!config.zoomClientId || !config.zoomClientSecret) {
@@ -267,6 +269,33 @@ function recordZoomEvent(eventEnvelope) {
   return normalizedEnvelope;
 }
 
+function resolveTranscriptLanguage(value) {
+  if (value === undefined || value === null || value === '') return rtms.TranscriptLanguage.NONE;
+  if (typeof value === 'number') return value;
+  const raw = String(value).trim();
+  if (/^-?\d+$/.test(raw)) return Number(raw);
+  const key = raw.toUpperCase().replace(/[\s-]+/g, '_');
+  if (Object.prototype.hasOwnProperty.call(rtms.TranscriptLanguage, key)) {
+    return rtms.TranscriptLanguage[key];
+  }
+  console.warn(`Unknown ZOOM_TRANSCRIPT_LANGUAGE=${raw}; falling back to NONE/autodetect.`);
+  return rtms.TranscriptLanguage.NONE;
+}
+
+function configureTranscriptLanguage(client) {
+  const srcLanguage = resolveTranscriptLanguage(config.transcriptLanguage);
+  const params = {
+    srcLanguage,
+    enableLid: config.transcriptEnableLid,
+  };
+  try {
+    client.setTranscriptParams(params);
+    console.log(`Configured transcript params: srcLanguage=${srcLanguage}; enableLid=${params.enableLid}`);
+  } catch (error) {
+    console.error('Failed to configure transcript params', error);
+  }
+}
+
 function joinRtms(payload) {
   const normalizedPayload = normalizeRtmsPayload(payload);
   const meetingUuid = getMeetingUuid(normalizedPayload);
@@ -284,6 +313,7 @@ function joinRtms(payload) {
   }
 
   const client = new rtms.Client();
+  configureTranscriptLanguage(client);
   clientsByMeeting.set(meetingUuid, client);
   ensureTranscriptMeeting(meetingUuid, normalizedPayload);
   if (streamId) streamToMeeting.set(streamId, meetingUuid);
@@ -503,6 +533,11 @@ app.get('/healthz', (_req, res) => {
     activeTranscriptChunks: Array.from(transcriptsByMeeting.values())
       .filter((meeting) => meeting.status === 'active')
       .reduce((total, meeting) => total + meeting.chunkCount, 0),
+    transcriptConfig: {
+      language: config.transcriptLanguage,
+      resolvedLanguageId: resolveTranscriptLanguage(config.transcriptLanguage),
+      enableLid: config.transcriptEnableLid,
+    },
     eventSubscription: {
       mode: config.zoomEventSubscriptionMode,
       websocket: zoomEventWsState,

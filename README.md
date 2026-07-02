@@ -43,12 +43,21 @@ npm start
 
 For the current Workshop deployment, configure the Zoom app event subscription as **WebSocket** and set `ZOOM_EVENT_WS_ENDPOINT` to the endpoint URL copied from Zoom Marketplace. The service obtains a Zoom OAuth client-credentials token, appends it to the endpoint URL, sends a heartbeat every 30 seconds, reconnects with backoff, and routes RTMS started/stopped events into the RTMS SDK join/leave path.
 
+For meetings primarily conducted in Chinese, set:
+
+```env
+ZOOM_TRANSCRIPT_LANGUAGE=CHINESE_SIMPLIFIED
+ZOOM_TRANSCRIPT_ENABLE_LID=false
+```
+
+`ZOOM_TRANSCRIPT_LANGUAGE` accepts Zoom RTMS `TranscriptLanguage` names such as `NONE`, `ENGLISH`, `CHINESE_SIMPLIFIED`, or the numeric language ID. `ZOOM_TRANSCRIPT_ENABLE_LID=false` forces the configured source language instead of letting Zoom auto-detect/override it.
+
 Webhook mode remains available for local testing or future deployments: set `ZOOM_EVENT_SUBSCRIPTION_MODE=webhook` and expose `POST /webhook` as the Zoom RTMS webhook endpoint.
 
 ## Realtime inspection endpoints
 
 ```text
-GET /healthz                 # service, WebSocket, recent Zoom event, and active meeting status
+GET /healthz                 # service, WebSocket, transcript config, recent Zoom event, and active meeting status
 GET /transcripts             # summary of recorded meetings/chunk counts
 GET /transcripts/:meetingUuid # full in-memory transcript for one meeting
 ```
