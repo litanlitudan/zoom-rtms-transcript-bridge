@@ -259,7 +259,9 @@ function recordZoomEvent(eventEnvelope) {
     receivedAt: new Date().toISOString(),
     meetingUuid: normalizedPayload.meeting_uuid || null,
     streamId: normalizedPayload.rtms_stream_id || null,
-    hasJoinPayload: Boolean(normalizedPayload.meeting_uuid && normalizedPayload.rtms_stream_id && normalizedPayload.server_urls && normalizedPayload.signature),
+    hasJoinPayload: Boolean(normalizedPayload.meeting_uuid && normalizedPayload.rtms_stream_id && normalizedPayload.server_urls),
+    hasServerUrls: Boolean(normalizedPayload.server_urls),
+    hasSignature: Boolean(normalizedPayload.signature),
   });
   while (recentZoomEvents.length > maxRecentZoomEvents) recentZoomEvents.shift();
   return normalizedEnvelope;
@@ -270,8 +272,9 @@ function joinRtms(payload) {
   const meetingUuid = getMeetingUuid(normalizedPayload);
   const streamId = getStreamId(normalizedPayload);
 
-  if (!normalizedPayload.meeting_uuid || !normalizedPayload.rtms_stream_id || !normalizedPayload.server_urls || !normalizedPayload.signature) {
-    console.error('Cannot join RTMS stream: started event payload is missing meeting_uuid, rtms_stream_id, server_urls, or signature.');
+  const missingFields = ['meeting_uuid', 'rtms_stream_id', 'server_urls'].filter((key) => !normalizedPayload[key]);
+  if (missingFields.length > 0) {
+    console.error(`Cannot join RTMS stream: started event payload is missing ${missingFields.join(', ')}.`);
     return;
   }
 
@@ -312,12 +315,7 @@ function joinRtms(payload) {
     console.log(`RTMS joined ${meetingUuid}: ${reason}`);
   });
 
-  client.join({
-    meeting_uuid: normalizedPayload.meeting_uuid,
-    rtms_stream_id: normalizedPayload.rtms_stream_id,
-    server_urls: normalizedPayload.server_urls,
-    signature: normalizedPayload.signature,
-  });
+  client.join(normalizedPayload);
 }
 
 function leaveRtms(payload) {
