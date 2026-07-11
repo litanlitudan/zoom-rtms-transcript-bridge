@@ -1,6 +1,6 @@
 # Zoom RTMS Transcript Bridge
 
-Thin service for Workshop SOP 1. It keeps the long-lived Zoom event subscription and RTMS SDK/WebSocket session outside Windmill and forwards transcript chunks into the Windmill script:
+Thin service for Workshop SOP 1. It keeps the long-lived Zoom event subscription and RTMS SDK/WebSocket session outside Windmill and forwards transcript chunks into the Windmill transcript-staging script:
 
 ```text
 f/workshop_signal_compiler/zoom_rtms_transcript_chunk_to_signal
@@ -17,7 +17,7 @@ Windmill is used for orchestration, normalization, Baserow writes, review digest
 - in-memory live transcript recording for realtime inspection via HTTP
 - retrying POSTs to Windmill
 
-It must not do offering/topic extraction.
+It must not do signal/offering/topic extraction. Transcript chunks are raw meeting evidence; downstream Windmill passes extract real signals/topics/offerings.
 
 ## Environment
 
@@ -62,7 +62,7 @@ GET /transcripts             # summary of recorded meetings/chunk counts
 GET /transcripts/:meetingUuid # full in-memory transcript for one meeting
 ```
 
-Each transcript chunk is recorded in memory immediately and then forwarded to Windmill for Baserow persistence. The in-memory store is intended for realtime debugging/inspection; Baserow remains the SOP source of truth.
+Each transcript chunk is recorded in memory immediately and then forwarded to Windmill for Baserow persistence in `Workshop Session Transcripts` (Baserow table 829; legacy logical key `signal_events`). The in-memory store is intended for realtime debugging/inspection; Baserow remains the SOP source of truth.
 
 ## Windmill payload mapping
 
